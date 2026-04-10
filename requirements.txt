@@ -1,0 +1,17 @@
+fastapi
+uvicorn
+celery[redis]
+redis
+supabase
+alembic
+sqlalchemy
+newsdataapi
+httpx
+python-dotenv
+pytz
+sentry-sdk[fastapi]
+stripe
+tavily-python
+together
+cartesia
+pydub
