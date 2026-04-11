@@ -7,11 +7,12 @@ voice note delivery, and text message sending.
 import hashlib
 import hmac
 import logging
-import tempfile
+import time
 
 import httpx
 import sentry_sdk
 from fastapi import APIRouter, Query, Request, Response
+from fastapi.responses import PlainTextResponse
 
 from utils.audio_converter import convert_to_ogg_opus
 from utils.config import (
@@ -20,7 +21,8 @@ from utils.config import (
     WHATSAPP_PHONE_NUMBER_ID,
     WHATSAPP_VERIFY_TOKEN,
 )
-from utils.exceptions import AudioConversionError, DeliveryError
+from utils.exceptions import DeliveryError
+from utils.redis_client import get_redis
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +32,14 @@ META_API_BASE = f"https://graph.facebook.com/v19.0/{WHATSAPP_PHONE_NUMBER_ID}"
 HEADERS = {
     "Authorization": f"Bearer {WHATSAPP_ACCESS_TOKEN}",
 }
+
+# Rate limiting: sliding window of 5 messages per phone per 60 seconds,
+# implemented via a Redis sorted set keyed on the sender's phone number.
+# Timestamps (ms) are the score; entries older than the window are trimmed
+# on every check.
+RATE_LIMIT_KEY_PREFIX = "ratelimit:whatsapp:"
+RATE_LIMIT_MAX_REQUESTS = 5
+RATE_LIMIT_WINDOW_SECONDS = 60
 
 
 # ---------------------------------------------------------------------------
@@ -53,7 +63,9 @@ async def verify_webhook(
 async def receive_webhook(request: Request):
     """Process inbound WhatsApp messages.
 
-    Always returns 200 to Meta to prevent retries, even on internal errors.
+    Applies per-sender rate limiting (5 messages / 60s). Returns HTTP 429
+    if any sender in the payload has exceeded their quota. Otherwise
+    processes messages and always returns 200 to Meta.
     """
     body = await request.body()
 
@@ -63,8 +75,22 @@ async def receive_webhook(request: Request):
         logger.warning("Invalid webhook signature — rejecting request")
         return Response(status_code=403)
 
+    # Parse payload for rate-limit check
     try:
         payload = await request.json()
+    except Exception as e:
+        sentry_sdk.capture_exception(e)
+        logger.error(f"Error parsing webhook payload: {e}")
+        return {"status": "ok"}
+
+    # Per-sender rate limiting — reject the whole payload if any sender is over quota
+    senders = _extract_senders(payload)
+    for phone in senders:
+        if not _check_rate_limit(phone):
+            logger.warning(f"Rate limit exceeded for {phone} — returning 429")
+            return PlainTextResponse("Too many requests", status_code=429)
+
+    try:
         _process_webhook_payload(payload)
     except Exception as e:
         sentry_sdk.capture_exception(e)
@@ -86,11 +112,66 @@ def _verify_signature(body: bytes, signature_header: str) -> bool:
     return hmac.compare_digest(expected, signature_header)
 
 
+def _extract_senders(payload: dict) -> list[str]:
+    """Walk the webhook payload and collect unique sender phone numbers."""
+    senders: list[str] = []
+    for entry in payload.get("entry", []):
+        for change in entry.get("changes", []):
+            for message in change.get("value", {}).get("messages", []):
+                phone = message.get("from", "")
+                if phone and phone not in senders:
+                    senders.append(phone)
+    return senders
+
+
+def _check_rate_limit(phone: str) -> bool:
+    """Sliding-window rate limiter using a Redis sorted set.
+
+    For each sender, we keep a sorted set of timestamps (ms) scored by
+    timestamp. On every check we:
+      1. Trim entries older than the window.
+      2. Count remaining entries.
+      3. If under the limit, add the current timestamp and allow.
+      4. If at/over the limit, deny (without adding a new entry).
+
+    Returns True if the request is allowed, False if the limit is exceeded.
+    Fails open on Redis errors — we don't want a Redis outage to cause
+    users to be locked out.
+    """
+    now_ms = int(time.time() * 1000)
+    window_start_ms = now_ms - (RATE_LIMIT_WINDOW_SECONDS * 1000)
+    key = f"{RATE_LIMIT_KEY_PREFIX}{phone}"
+
+    try:
+        r = get_redis()
+        # Atomic pipeline: trim old entries, count, conditionally add.
+        pipe = r.pipeline()
+        pipe.zremrangebyscore(key, 0, window_start_ms)
+        pipe.zcard(key)
+        results = pipe.execute()
+        current_count = results[1]
+
+        if current_count >= RATE_LIMIT_MAX_REQUESTS:
+            return False
+
+        # Under the limit — record this request and refresh the TTL.
+        pipe = r.pipeline()
+        pipe.zadd(key, {str(now_ms): now_ms})
+        pipe.expire(key, RATE_LIMIT_WINDOW_SECONDS)
+        pipe.execute()
+        return True
+    except Exception as e:
+        # Fail open: log to Sentry but let the request through.
+        sentry_sdk.capture_exception(e)
+        logger.warning(f"Rate limit check failed for {phone}, allowing: {e}")
+        return True
+
+
 def _process_webhook_payload(payload: dict) -> None:
     """Extract messages from webhook payload and route them."""
     # Lazy imports to avoid circular dependencies
-    from services.ticker_manager import handle_command
     from services.referrals import handle_start_command
+    from services.ticker_manager import handle_command
 
     entries = payload.get("entry", [])
     for entry in entries:

@@ -15,6 +15,18 @@ from services.news_service import Article
 from utils.exceptions import ScriptGenerationError, TTSError
 
 
+@pytest.fixture(autouse=True)
+def mock_redis():
+    """Mock the Redis client so tests never touch a real Redis instance.
+
+    By default the lock is granted (set returns truthy); individual tests
+    can override the return value to simulate a held lock.
+    """
+    with patch("services.analyst.get_redis") as mock:
+        mock.return_value.set.return_value = True
+        yield mock
+
+
 @pytest.fixture
 def article():
     return Article(
@@ -190,3 +202,59 @@ class TestProcessArticle:
         mock_voice.side_effect = TTSError("Cartesia failed")
         process_article(article)
         mock_db.save_squawk_log.assert_not_called()
+
+    @patch("services.analyst.db")
+    @patch("services.analyst._enrich_context")
+    def test_skips_when_lock_held(self, mock_enrich, mock_db, mock_redis, article):
+        """If Redis SETNX returns False, pipeline should skip immediately."""
+        mock_redis.return_value.set.return_value = False
+        process_article(article)
+        mock_enrich.assert_not_called()
+        mock_db.save_squawk_log.assert_not_called()
+
+    @patch("services.analyst._maybe_send_referral_prompt")
+    @patch("services.analyst.send_voice_note")
+    @patch("services.analyst.db")
+    @patch("services.analyst._synthesize_voice")
+    @patch("services.analyst._generate_script")
+    @patch("services.analyst._enrich_context")
+    def test_continues_when_redis_fails(
+        self, mock_enrich, mock_script, mock_voice, mock_db, mock_send, mock_referral, mock_redis, article
+    ):
+        """Redis failure must not block processing — fall through to DB dedup."""
+        mock_redis.return_value.set.side_effect = Exception("Redis down")
+        mock_enrich.return_value = "context"
+        mock_script.return_value = f"script. {DISCLAIMER}"
+        mock_voice.return_value = b"audio"
+        mock_db.get_users_for_ticker.return_value = [
+            {"id": "u1", "phone_number": "+123", "subscription_status": "active", "notification_time": None}
+        ]
+        mock_db.save_squawk_log.return_value = "squawk-id"
+
+        with patch("services.analyst.is_user_eligible_for_delivery", return_value=True):
+            process_article(article)
+
+        mock_enrich.assert_called_once()
+        mock_db.save_squawk_log.assert_called_once()
+
+    @patch("services.analyst._maybe_send_referral_prompt")
+    @patch("services.analyst.send_voice_note")
+    @patch("services.analyst.db")
+    @patch("services.analyst._synthesize_voice")
+    @patch("services.analyst._generate_script")
+    @patch("services.analyst._enrich_context")
+    def test_setnx_called_with_correct_key_and_ttl(
+        self, mock_enrich, mock_script, mock_voice, mock_db, mock_send, mock_referral, mock_redis, article
+    ):
+        from services.analyst import PROCESSING_LOCK_PREFIX, PROCESSING_LOCK_TTL_SECONDS
+        mock_enrich.return_value = "context"
+        mock_script.return_value = f"script. {DISCLAIMER}"
+        mock_voice.return_value = b"audio"
+        mock_db.get_users_for_ticker.return_value = []
+        with patch("services.analyst.is_user_eligible_for_delivery", return_value=True):
+            process_article(article)
+
+        expected_key = f"{PROCESSING_LOCK_PREFIX}{article.url_hash}"
+        mock_redis.return_value.set.assert_called_once_with(
+            expected_key, "1", nx=True, ex=PROCESSING_LOCK_TTL_SECONDS
+        )

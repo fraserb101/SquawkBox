@@ -32,7 +32,8 @@ def app():
         "TERMS_URL": "https://example.com/terms",
     }):
         from fastapi import FastAPI
-        from services.whatsapp import router, _verify_signature
+
+        from services.whatsapp import _verify_signature, router
         app = FastAPI()
         app.include_router(router)
         yield app
@@ -99,3 +100,108 @@ class TestSendTextMessage:
 
         result = send_text_message("+123", "Hello")
         assert result["messages"][0]["id"] == "msg-1"
+
+
+class TestExtractSenders:
+    def test_extracts_unique_senders(self):
+        from services.whatsapp import _extract_senders
+        payload = {
+            "entry": [{
+                "changes": [{
+                    "value": {
+                        "messages": [
+                            {"from": "+111", "type": "text", "text": {"body": "hi"}},
+                            {"from": "+222", "type": "text", "text": {"body": "hi"}},
+                            {"from": "+111", "type": "text", "text": {"body": "hi again"}},
+                        ]
+                    }
+                }]
+            }]
+        }
+        result = _extract_senders(payload)
+        assert result == ["+111", "+222"]
+
+    def test_empty_payload(self):
+        from services.whatsapp import _extract_senders
+        assert _extract_senders({}) == []
+
+
+class TestCheckRateLimit:
+    def test_allows_under_limit(self):
+        from services.whatsapp import _check_rate_limit
+        with patch("services.whatsapp.get_redis") as mock_get:
+            mock_r = MagicMock()
+            mock_get.return_value = mock_r
+            # Simulate 2 existing entries, below the limit of 5
+            mock_r.pipeline.return_value.execute.side_effect = [
+                [0, 2],  # zremrangebyscore, zcard
+                [1, True],  # zadd, expire
+            ]
+            assert _check_rate_limit("+123") is True
+
+    def test_denies_at_limit(self):
+        from services.whatsapp import _check_rate_limit
+        with patch("services.whatsapp.get_redis") as mock_get:
+            mock_r = MagicMock()
+            mock_get.return_value = mock_r
+            mock_r.pipeline.return_value.execute.return_value = [0, 5]  # 5 existing
+            assert _check_rate_limit("+123") is False
+
+    def test_denies_over_limit(self):
+        from services.whatsapp import _check_rate_limit
+        with patch("services.whatsapp.get_redis") as mock_get:
+            mock_r = MagicMock()
+            mock_get.return_value = mock_r
+            mock_r.pipeline.return_value.execute.return_value = [0, 10]
+            assert _check_rate_limit("+123") is False
+
+    def test_fails_open_on_redis_error(self):
+        from services.whatsapp import _check_rate_limit
+        with patch("services.whatsapp.get_redis") as mock_get:
+            mock_get.side_effect = Exception("Redis down")
+            assert _check_rate_limit("+123") is True
+
+
+class TestWebhookRateLimitIntegration:
+    def _build_request(self, phone: str, text: str = "HELP") -> tuple[bytes, str]:
+        payload = {
+            "entry": [{
+                "changes": [{
+                    "value": {
+                        "messages": [
+                            {"from": phone, "type": "text", "text": {"body": text}},
+                        ]
+                    }
+                }]
+            }]
+        }
+        body = json.dumps(payload).encode()
+        sig = "sha256=" + hmac.new(b"test-secret", body, hashlib.sha256).hexdigest()
+        return body, sig
+
+    @patch("services.whatsapp._process_webhook_payload")
+    @patch("services.whatsapp._check_rate_limit")
+    def test_webhook_returns_429_when_rate_limited(self, mock_rate, mock_process, client):
+        mock_rate.return_value = False
+        body, sig = self._build_request("+111")
+        resp = client.post(
+            "/webhook",
+            content=body,
+            headers={"X-Hub-Signature-256": sig, "Content-Type": "application/json"},
+        )
+        assert resp.status_code == 429
+        assert resp.text == "Too many requests"
+        mock_process.assert_not_called()
+
+    @patch("services.whatsapp._process_webhook_payload")
+    @patch("services.whatsapp._check_rate_limit")
+    def test_webhook_allows_within_limit(self, mock_rate, mock_process, client):
+        mock_rate.return_value = True
+        body, sig = self._build_request("+111")
+        resp = client.post(
+            "/webhook",
+            content=body,
+            headers={"X-Hub-Signature-256": sig, "Content-Type": "application/json"},
+        )
+        assert resp.status_code == 200
+        mock_process.assert_called_once()

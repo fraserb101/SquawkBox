@@ -174,7 +174,6 @@ async def stripe_webhook(request: Request):
 def _handle_checkout_completed(data: dict) -> None:
     """Process a successful checkout — activate the user's subscription."""
     customer_id = data.get("customer")
-    customer_email = data.get("customer_details", {}).get("email")
     customer_phone = data.get("customer_details", {}).get("phone")
 
     # Try to find user by phone from metadata or customer details

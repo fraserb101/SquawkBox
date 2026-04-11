@@ -1,7 +1,7 @@
 """Tests for utils/audio_converter.py."""
 
-from unittest.mock import MagicMock, patch, mock_open
 import subprocess
+from unittest.mock import MagicMock, mock_open, patch
 
 import pytest
 

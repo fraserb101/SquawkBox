@@ -1,0 +1,57 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    env:
+      # Dummy values for config._require() so imports don't blow up at test collection
+      SUPABASE_URL: https://test.supabase.co
+      SUPABASE_KEY: test-key
+      REDIS_URL: redis://localhost:6379/0
+      NEWSDATA_API_KEY: test
+      TAVILY_API_KEY: test
+      TOGETHER_API_KEY: test
+      CARTESIA_API_KEY: test
+      CARTESIA_VOICE_ID: test
+      WHATSAPP_PHONE_NUMBER_ID: "123"
+      WHATSAPP_ACCESS_TOKEN: test-token
+      WHATSAPP_VERIFY_TOKEN: test-verify
+      WHATSAPP_APP_SECRET: test-secret
+      STRIPE_SECRET_KEY: sk_test_xxx
+      STRIPE_WEBHOOK_SECRET: whsec_test
+      STRIPE_PAYMENT_LINK: https://pay.stripe.com/test
+      ADMIN_SECRET: admin-secret
+      TERMS_URL: https://example.com/terms
+      YOUR_WHATSAPP_NUMBER: "15551234567"
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11.15"
+          cache: pip
+
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+
+      - name: Install pinned Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install ruff
+
+      - name: Lint with ruff
+        run: ruff check .
+
+      - name: Run tests
+        run: pytest tests/ -v

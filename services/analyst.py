@@ -13,7 +13,6 @@ next poll cycle.
 """
 
 import logging
-from datetime import datetime, timezone
 
 import httpx
 import sentry_sdk
@@ -32,12 +31,20 @@ from utils.config import (
     TOGETHER_API_KEY,
 )
 from utils.exceptions import DeliveryError, ScriptGenerationError, TTSError
+from utils.redis_client import get_redis
 
 logger = logging.getLogger(__name__)
 
 DISCLAIMER = "This is not financial advice."
 MAX_SCRIPT_WORDS = 150
 TRUNCATION_THRESHOLD = 160
+
+# Idempotency lock: prevents duplicate processing if the same article
+# appears across polling cycles (e.g. a new poll starts before the last
+# one finished, or a worker is retried). The key TTL is 7 days, long
+# enough to cover news cycles but short enough that Redis stays bounded.
+PROCESSING_LOCK_TTL_SECONDS = 7 * 24 * 60 * 60
+PROCESSING_LOCK_PREFIX = "squawk:processing:"
 
 SYSTEM_PROMPT = (
     "You are a high-energy financial news reporter delivering a concise voice note. "
@@ -61,6 +68,30 @@ def process_article(article: Article) -> None:
     ticker = article.ticker
     url = article.url
     url_hash = article.url_hash
+
+    # Idempotency: claim exclusive processing rights for this URL via
+    # Redis SETNX. If another worker already holds the lock (same article
+    # picked up by an overlapping poll), skip immediately. The lock
+    # expires after PROCESSING_LOCK_TTL_SECONDS so stale keys don't
+    # accumulate.
+    lock_key = f"{PROCESSING_LOCK_PREFIX}{url_hash}"
+    try:
+        acquired = get_redis().set(
+            lock_key,
+            "1",
+            nx=True,
+            ex=PROCESSING_LOCK_TTL_SECONDS,
+        )
+    except Exception as e:
+        # Redis failure should not block processing — fall through and
+        # let the squawk_logs hash check handle dedup on the DB side.
+        sentry_sdk.capture_exception(e)
+        logger.warning(f"Redis SETNX failed for {url}, continuing without lock: {e}")
+        acquired = True
+
+    if not acquired:
+        logger.info(f"Skipping {url} — already being processed (lock held)")
+        return
 
     logger.info(f"Processing article: {article.title} (ticker={ticker})")
 
