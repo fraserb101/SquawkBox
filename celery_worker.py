@@ -56,7 +56,7 @@ celery_app.conf.beat_schedule = {
     },
     "deliver-scheduled-digests": {
         "task": "celery_worker.deliver_scheduled_digests",
-        "schedule": 60.0,  # Every minute — checks per-user notification_time
+        "schedule": 900.0,  # 15 minutes — matches the news poll interval
     },
 }
 
