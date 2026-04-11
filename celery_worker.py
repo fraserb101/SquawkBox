@@ -9,9 +9,15 @@ Run beat:    celery -A celery_worker beat --loglevel=info
 
 import logging
 
+import sentry_sdk
 from celery import Celery
 from celery.schedules import crontab
 
+from services.analyst import process_article
+from services.billing import check_expiring_trials as _check_expiring_trials
+from services.billing import expire_overdue_trials as _expire_overdue_trials
+from services.news_service import Article, fetch_news, get_all_subscribed_tickers
+from tasks.scheduled_tasks import run_scheduled_deliveries
 from utils.config import REDIS_URL
 
 logger = logging.getLogger(__name__)
@@ -69,9 +75,6 @@ celery_app.conf.beat_schedule = {
 @celery_app.task(name="celery_worker.poll_news")
 def poll_news():
     """Fetch news for all subscribed tickers and process new articles."""
-    from services.analyst import process_article
-    from services.news_service import fetch_news, get_all_subscribed_tickers
-
     tickers = get_all_subscribed_tickers()
     if not tickers:
         logger.info("No subscribed tickers — skipping news poll")
@@ -85,7 +88,6 @@ def poll_news():
             process_article(article)
         except Exception as e:
             # One article failure must not block the batch
-            import sentry_sdk
             sentry_sdk.capture_exception(e)
             logger.error(f"Failed to process article {article.url}: {e}")
 
@@ -93,32 +95,26 @@ def poll_news():
 @celery_app.task(name="celery_worker.check_expiring_trials")
 def check_expiring_trials():
     """Send trial expiry notifications."""
-    from services.billing import check_expiring_trials as _check
-    sent = _check()
+    sent = _check_expiring_trials()
     logger.info(f"Sent {sent} trial expiry notifications")
 
 
 @celery_app.task(name="celery_worker.expire_overdue_trials")
 def expire_overdue_trials():
     """Mark overdue trials as expired."""
-    from services.billing import expire_overdue_trials as _expire
-    expired = _expire()
+    expired = _expire_overdue_trials()
     logger.info(f"Expired {expired} overdue trials")
 
 
 @celery_app.task(name="celery_worker.deliver_scheduled_digests")
 def deliver_scheduled_digests():
     """Deliver scheduled digests for users whose notification_time matches now."""
-    from tasks.scheduled_tasks import run_scheduled_deliveries
     run_scheduled_deliveries()
 
 
 @celery_app.task(name="celery_worker.process_single_article")
 def process_single_article_task(title: str, url: str, description: str, content: str, ticker: str):
     """Process a single article (can be enqueued as an async task)."""
-    from services.analyst import process_article
-    from services.news_service import Article
-
     article = Article(
         title=title, url=url, description=description, content=content, ticker=ticker
     )
