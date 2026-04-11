@@ -11,7 +11,7 @@ import sentry_sdk
 
 from services import database as db
 from services.whatsapp import send_text_message
-from utils.config import STRIPE_PAYMENT_LINK, TERMS_URL, YOUR_WHATSAPP_NUMBER
+from utils.config import TERMS_URL, YOUR_WHATSAPP_NUMBER
 from utils.exceptions import DatabaseError
 
 logger = logging.getLogger(__name__)

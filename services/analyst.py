@@ -13,7 +13,6 @@ next poll cycle.
 """
 
 import logging
-from datetime import datetime, timezone
 
 import httpx
 import sentry_sdk

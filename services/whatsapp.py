@@ -7,7 +7,6 @@ voice note delivery, and text message sending.
 import hashlib
 import hmac
 import logging
-import tempfile
 import time
 
 import httpx
@@ -22,7 +21,7 @@ from utils.config import (
     WHATSAPP_PHONE_NUMBER_ID,
     WHATSAPP_VERIFY_TOKEN,
 )
-from utils.exceptions import AudioConversionError, DeliveryError
+from utils.exceptions import DeliveryError
 from utils.redis_client import get_redis
 
 logger = logging.getLogger(__name__)
@@ -171,8 +170,8 @@ def _check_rate_limit(phone: str) -> bool:
 def _process_webhook_payload(payload: dict) -> None:
     """Extract messages from webhook payload and route them."""
     # Lazy imports to avoid circular dependencies
-    from services.ticker_manager import handle_command
     from services.referrals import handle_start_command
+    from services.ticker_manager import handle_command
 
     entries = payload.get("entry", [])
     for entry in entries:

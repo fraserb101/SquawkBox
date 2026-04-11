@@ -4,7 +4,6 @@ All routes are protected by X-Admin-Secret header. Never expose publicly.
 """
 
 import logging
-from typing import Optional
 
 import sentry_sdk
 from fastapi import APIRouter, Depends, Header, HTTPException, Query

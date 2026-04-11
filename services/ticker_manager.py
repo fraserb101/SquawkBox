@@ -72,7 +72,7 @@ def handle_command(phone: str, text: str) -> None:
     else:
         send_text_message(
             user["phone_number"],
-            f"Unknown command. Reply HELP to see available commands.",
+            "Unknown command. Reply HELP to see available commands.",
         )
 
 

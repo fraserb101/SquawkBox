@@ -32,7 +32,8 @@ def app():
         "TERMS_URL": "https://example.com/terms",
     }):
         from fastapi import FastAPI
-        from services.whatsapp import router, _verify_signature
+
+        from services.whatsapp import _verify_signature, router
         app = FastAPI()
         app.include_router(router)
         yield app
