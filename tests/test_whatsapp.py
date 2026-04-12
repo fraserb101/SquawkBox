@@ -20,7 +20,7 @@ def app():
         "TWILIO_ACCOUNT_SID": "ACtest",
         "TWILIO_AUTH_TOKEN": "test-token",
         "TWILIO_WHATSAPP_FROM": "+14155238886",
-        "PUBLIC_BASE_URL": "https://test.ngrok-free.app",
+        "PUBLIC_BASE_URL": "https://test.example.com",
         "STRIPE_SECRET_KEY": "sk_test_xxx",
         "STRIPE_WEBHOOK_SECRET": "whsec_test",
         "STRIPE_PAYMENT_LINK": "https://pay.stripe.com/test",
@@ -49,14 +49,14 @@ def _sign(url: str, params: dict) -> str:
 class TestVerifySignature:
     def test_valid_signature(self):
         from services.whatsapp import _verify_signature
-        url = "https://test.ngrok-free.app/webhook"
+        url = "https://test.example.com/webhook"
         params = {"From": "whatsapp:+15551234567", "Body": "hi"}
         sig = _sign(url, params)
         assert _verify_signature(url, params, sig) is True
 
     def test_invalid_signature(self):
         from services.whatsapp import _verify_signature
-        url = "https://test.ngrok-free.app/webhook"
+        url = "https://test.example.com/webhook"
         params = {"From": "whatsapp:+15551234567", "Body": "hi"}
         assert _verify_signature(url, params, "bogus") is False
 
@@ -66,7 +66,7 @@ class TestVerifySignature:
 
     def test_tampered_params_rejected(self):
         from services.whatsapp import _verify_signature
-        url = "https://test.ngrok-free.app/webhook"
+        url = "https://test.example.com/webhook"
         params = {"From": "whatsapp:+15551234567", "Body": "hi"}
         sig = _sign(url, params)
         # Tamper with the body after signing
@@ -176,7 +176,7 @@ class TestSendVoiceNote:
         # Verify MediaUrl points at our public base + /media/{token}
         call_kwargs = mock_client.post.call_args.kwargs
         media_url = call_kwargs["data"]["MediaUrl"]
-        assert media_url.startswith("https://test.ngrok-free.app/media/")
+        assert media_url.startswith("https://test.example.com/media/")
         assert call_kwargs["data"]["To"] == "whatsapp:+15551234567"
 
 
@@ -203,7 +203,7 @@ class TestServeMediaEndpoint:
 class TestWebhookIntegration:
     def _build_request(self, phone: str, text: str = "HELP"):
         params = {"From": f"whatsapp:{phone}", "Body": text}
-        sig = _sign("https://test.ngrok-free.app/webhook", params)
+        sig = _sign("https://test.example.com/webhook", params)
         return params, sig
 
     def test_webhook_rejects_missing_signature(self, client):

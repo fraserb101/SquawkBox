@@ -99,9 +99,9 @@ def _verify_signature(full_url: str, params: dict, signature_header: str) -> boo
     We delegate the math to Twilio's RequestValidator so media-message and
     Unicode edge cases are handled correctly.
 
-    Important: Twilio signs the *public* URL it POSTed to, so behind a tunnel
-    like ngrok we must reconstruct it from PUBLIC_BASE_URL rather than from
-    FastAPI's internal request.url (which would be http://localhost:8000).
+    Important: Twilio signs the *public* URL it POSTed to, so behind a
+    reverse proxy we must reconstruct it from PUBLIC_BASE_URL rather than
+    from FastAPI's internal request.url.
     """
     if not signature_header:
         return False

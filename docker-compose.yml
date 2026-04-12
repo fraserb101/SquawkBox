@@ -1,17 +1,15 @@
-# Local development stack for SquawkBox.
+# LOCAL DEVELOPMENT ONLY — not used in production.
 #
-# Spins up the FastAPI app (uvicorn), a Celery worker, a Celery beat
-# scheduler, and a Redis instance. Supabase is hosted, so there's no
-# Postgres container — the DB connection is just an env var pointing at
-# your Supabase project.
+# For production deployment, SquawkBox runs on Railway.app.
+# See SETUP.md for the Railway deployment guide.
 #
-# Usage:
+# This file is only useful if you have a laptop with Docker Desktop
+# and want to run the stack locally. Usage:
+#
 #   cp .env.example .env && fill in values
 #   docker compose up --build
 #
-# Then expose port 8000 with ngrok and paste the public URL into the
-# Twilio WhatsApp sandbox "When a message comes in" field. See SETUP.md
-# for the full walkthrough.
+# You'll also need ngrok to expose port 8000 to Twilio for local testing.
 
 services:
   redis:
