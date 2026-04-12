@@ -1,0 +1,11 @@
+# Railway deployment configuration for SquawkBox.
+#
+# This file is read by all three services (app, worker, beat) since they
+# share the same repository. Build settings are shared; start commands
+# are configured per-service in the Railway dashboard.
+#
+# See SETUP.md for the full deployment walkthrough.
+
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "Dockerfile"

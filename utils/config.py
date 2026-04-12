@@ -22,8 +22,8 @@ def _optional(key: str, default: str = "") -> str:
 SUPABASE_URL = _require("SUPABASE_URL")
 SUPABASE_KEY = _require("SUPABASE_KEY")
 
-# Redis
-REDIS_URL = _optional("REDIS_URL", "redis://localhost:6379/0")
+# Redis (set automatically by Railway Redis plugin, or via .env for local dev)
+REDIS_URL = _require("REDIS_URL")
 
 # News
 NEWSDATA_API_KEY = _require("NEWSDATA_API_KEY")
@@ -43,9 +43,10 @@ TWILIO_ACCOUNT_SID = _require("TWILIO_ACCOUNT_SID")
 TWILIO_AUTH_TOKEN = _require("TWILIO_AUTH_TOKEN")
 TWILIO_WHATSAPP_FROM = _require("TWILIO_WHATSAPP_FROM")
 
-# Public base URL (e.g. ngrok tunnel) where Twilio POSTs the webhook and
-# fetches cached voice notes from. Used both for signature verification
-# and to construct MediaUrl values.
+# Public base URL where Twilio POSTs the webhook and fetches cached voice
+# notes from. On Railway this is the app service's generated domain
+# (e.g. https://app-production-abc123.up.railway.app). Used for both
+# signature verification and MediaUrl construction.
 PUBLIC_BASE_URL = _require("PUBLIC_BASE_URL")
 
 # Stripe

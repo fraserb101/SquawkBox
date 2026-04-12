@@ -1,356 +1,286 @@
-# SquawkBox — Local Setup
+# SquawkBox — Railway Deployment (iPad-Friendly)
 
-This is the end-to-end walkthrough for running SquawkBox on your laptop so
-that a WhatsApp message to the Twilio sandbox returns an AI-generated
-financial-news voice note.
+Every step below can be done from an iPad using Safari — no terminal,
+Docker, or ngrok required.
 
-- **App:** FastAPI (uvicorn) on port 8000 — `main.py`
-- **Background jobs:** Celery worker + beat — `celery_worker.py`
-- **Queue/broker:** Redis (Docker service)
-- **Inbound messaging:** Twilio WhatsApp sandbox webhook → `POST /webhook`
-- **Outbound voice notes:** served back to Twilio via `GET /media/{token}`
-- **Database:** hosted Supabase (no local Postgres)
+- **App:** FastAPI (uvicorn) — Twilio webhooks + voice note media
+- **Worker:** Celery worker — AI pipeline (news enrichment, script, TTS)
+- **Beat:** Celery beat — recurring tasks (poll every 15 min, trial expiry)
+- **Redis:** Railway plugin — message broker and audio cache
+- **Database:** Hosted Supabase (no self-managed Postgres)
 
 ---
 
 ## 1. Prerequisites
 
-Install these on your machine before going further:
+You need a browser and accounts at each of the following:
 
-| Tool | Why | Install |
+| Service | Why | Sign up |
 |---|---|---|
-| **Docker Desktop** | Runs the whole stack | https://www.docker.com/products/docker-desktop/ |
-| **ngrok** | Exposes port 8000 to Twilio | https://ngrok.com/download (or `brew install ngrok`) |
-| **Python 3.11** (optional) | Only needed if you want to run tests outside Docker. The app itself runs in Docker from `python:3.11-slim`. | https://www.python.org/downloads/release/python-31115/ |
-| **A WhatsApp-enabled phone** | To message the Twilio sandbox | — |
-
-Sign up for free accounts at each of the following — you'll grab keys from
-each in the next section:
-
-- Twilio: https://www.twilio.com/try-twilio
-- Supabase: https://supabase.com/dashboard/sign-up
-- NewsData.io: https://newsdata.io/register
-- Tavily: https://app.tavily.com/home
-- Together AI: https://api.together.ai/signin
-- Cartesia: https://play.cartesia.ai/sign-up
-- Stripe (test mode only): https://dashboard.stripe.com/register
-- Sentry (optional, leave blank to skip): https://sentry.io/signup/
+| **Railway** | Hosts app, worker, beat, Redis | https://railway.app |
+| **GitHub** | Railway deploys from your repo | https://github.com |
+| **Supabase** | Hosted Postgres database + REST API | https://supabase.com/dashboard/sign-up |
+| **Twilio** | WhatsApp messaging (sandbox) | https://www.twilio.com/try-twilio |
+| **NewsData.io** | Financial news feed | https://newsdata.io/register |
+| **Tavily** | Context enrichment for headlines | https://app.tavily.com/home |
+| **Together AI** | LLM script generation | https://api.together.ai/signin |
+| **Cartesia** | Text-to-speech | https://play.cartesia.ai/sign-up |
+| **Stripe** | Billing (test mode — dummy keys are fine) | https://dashboard.stripe.com/register |
+| **Sentry** (optional) | Error tracking — leave blank to skip | https://sentry.io/signup/ |
 
 ---
 
-## 2. Clone and create your `.env`
+## 2. Connect the GitHub repo
 
-```bash
-git clone https://github.com/fraserb101/SquawkBox.git
-cd SquawkBox
-cp .env.example .env
-```
-
-Every variable below needs a value in `.env`. The rest of this section
-explains each one and where to find it.
-
-### Supabase
-
-1. Create a new project at https://supabase.com/dashboard/projects.
-2. Once the project is provisioned, open **Project Settings → API**.
-   - Copy **Project URL** → `SUPABASE_URL`
-   - Copy the **`service_role`** secret → `SUPABASE_KEY`
-     (not the `anon` key — the service role is required to bypass RLS
-     from the backend.)
-3. Open **Project Settings → Database → Connection string**, pick
-   **URI**, and copy it → `DATABASE_URL`. This is only used by Alembic
-   when running migrations.
-
-```env
-SUPABASE_URL=https://<ref>.supabase.co
-SUPABASE_KEY=<service_role_key>
-DATABASE_URL=postgresql://postgres:<password>@db.<ref>.supabase.co:5432/postgres
-```
-
-### Redis
-
-`REDIS_URL` is pre-filled for the docker-compose network and should
-normally be left as-is:
-
-```env
-REDIS_URL=redis://redis:6379/0
-```
-
-### NewsData.io
-
-1. Sign in at https://newsdata.io/dashboard.
-2. Copy your API key from the dashboard → `NEWSDATA_API_KEY`.
-
-### Tavily (context enrichment for headline-only articles)
-
-1. Go to https://app.tavily.com/home.
-2. Copy the API key from the dashboard → `TAVILY_API_KEY`.
-
-### Together AI (LLM script generation)
-
-1. Sign in at https://api.together.ai.
-2. Open **Settings → API Keys**, create a key → `TOGETHER_API_KEY`.
-
-### Cartesia (text-to-speech)
-
-1. Sign in at https://play.cartesia.ai.
-2. Open **API Keys** in the sidebar, create a key → `CARTESIA_API_KEY`.
-3. Open **Voices**, pick any voice, copy its ID → `CARTESIA_VOICE_ID`.
-
-### Twilio WhatsApp sandbox
-
-This is the one that actually delivers messages. Stay in **test** mode — you
-don't need a WhatsApp Business account for the sandbox.
-
-1. Sign up at https://www.twilio.com/try-twilio.
-2. From the Twilio Console home page, copy **Account SID** →
-   `TWILIO_ACCOUNT_SID`.
-3. From the same page, click **Show** next to **Auth Token** and copy it
-   → `TWILIO_AUTH_TOKEN`.
-4. In the left sidebar, go to **Messaging → Try it out → Send a WhatsApp
-   message**. This opens the sandbox page.
-5. The sandbox gives you a **Twilio phone number** at the top of the page,
-   e.g. `+1 415 523 8886`. Put it in `.env` **with the `+`**:
-   ```env
-   TWILIO_WHATSAPP_FROM=+14155238886
-   ```
-6. Also set the same number (without `+`) for referral deep links:
-   ```env
-   YOUR_WHATSAPP_NUMBER=14155238886
-   ```
-7. Note down the **join word** shown on the same page — something like
-   `join violet-purple`. You'll send that as your first message from your
-   phone later.
-
-`PUBLIC_BASE_URL` is left blank for now — you'll fill it in once ngrok is
-running (section 4).
-
-### Stripe
-
-Stripe isn't exercised by the basic "send a message, get a voice note"
-loop, but `utils/config.py` requires the three vars to be set. For local
-dev, use dummy test-mode values so imports succeed:
-
-```env
-STRIPE_SECRET_KEY=sk_test_dummy
-STRIPE_WEBHOOK_SECRET=whsec_dummy
-STRIPE_PAYMENT_LINK=https://buy.stripe.com/test_dummy
-```
-
-If you want real Stripe webhooks too, grab a test-mode secret key from
-https://dashboard.stripe.com/test/apikeys and a webhook signing secret
-from https://dashboard.stripe.com/test/webhooks.
-
-### Admin, Sentry, Terms
-
-```env
-ADMIN_SECRET=<any-long-random-string>   # used for /admin/* X-Admin-Secret header
-SENTRY_DSN=                              # leave blank to disable Sentry
-TERMS_URL=https://example.com/terms     # any URL is fine for local
-```
+1. Go to https://github.com/fraserb101/SquawkBox.
+2. Fork it to your own GitHub account (tap **Fork** at the top right).
 
 ---
 
-## 3. Start the stack
+## 3. Create a Railway project
 
-```bash
-docker compose up --build
-```
-
-You should see four services come up:
-- `squawkbox-redis-1` — Redis
-- `squawkbox-app-1` — `Uvicorn running on http://0.0.0.0:8000`
-- `squawkbox-worker-1` — `celery@... ready.`
-- `squawkbox-beat-1` — `beat: Starting...`
-
-The app will fail to start if any required env var is missing — the
-error message will name the variable. Fix it in `.env` and re-run.
-
-Sanity check from another terminal:
-
-```bash
-curl http://localhost:8000/health
-# {"status":"ok"}
-```
+1. Go to https://railway.app and sign in with GitHub.
+2. Tap **New Project** → **Empty Project**.
+3. Name it `squawkbox`.
 
 ---
 
-## 4. Start ngrok and wire up the webhook
+## 4. Add Redis
 
-In a second terminal:
+1. Inside your project, tap **New** → **Database** → **Redis**.
+2. Railway provisions a Redis instance automatically. No config needed.
 
-```bash
-ngrok http 8000
-```
+---
 
-ngrok prints a forwarding URL like
-`https://abc123.ngrok-free.app -> http://localhost:8000`. Copy the
-HTTPS URL.
+## 5. Create the three services
 
-### 4a. Tell the app about its public URL
+All three use the same GitHub repo with different start commands.
 
-Twilio signs every webhook using the public URL it's calling. Our signature
-check needs that exact URL, so:
+### 5a. App service (FastAPI)
 
-1. Set `PUBLIC_BASE_URL` in `.env` to the ngrok URL (no trailing slash):
-   ```env
-   PUBLIC_BASE_URL=https://abc123.ngrok-free.app
+1. Tap **New** → **GitHub Repo** → select your SquawkBox fork.
+2. Railway detects the Dockerfile and starts building.
+3. Click the new service, go to **Settings**:
+   - **Service Name:** `app`
+   - **Start Command:**
+     ```
+     alembic upgrade head && uvicorn main:app --host 0.0.0.0 --port $PORT --workers 1
+     ```
+     This runs database migrations before each deploy (Alembic is
+     idempotent), then starts the web server on Railway's assigned port.
+   - Under **Networking**, tap **Generate Domain**. Copy the public URL
+     (e.g. `https://app-production-abc123.up.railway.app`). This replaces
+     ngrok entirely.
+
+### 5b. Worker service (Celery worker)
+
+1. Tap **New** → **GitHub Repo** → select the same repo again.
+2. Click the service, go to **Settings**:
+   - **Service Name:** `worker`
+   - **Start Command:**
+     ```
+     celery -A celery_worker worker --loglevel=info
+     ```
+   - Do NOT generate a domain — the worker has no HTTP traffic.
+
+### 5c. Beat service (Celery beat)
+
+1. Tap **New** → **GitHub Repo** → select the same repo a third time.
+2. Click the service, go to **Settings**:
+   - **Service Name:** `beat`
+   - **Start Command:**
+     ```
+     celery -A celery_worker beat --loglevel=info
+     ```
+   - Do NOT generate a domain.
+
+---
+
+## 6. Set environment variables
+
+Use Railway's **Shared Variables** so all three services inherit the
+same config.
+
+1. In your project, tap **Settings** → **Shared Variables** →
+   **New Variable Group** → name it `squawkbox-config`.
+2. Add every variable from the table below.
+3. Go to each service (app, worker, beat), tap **Variables** →
+   **Shared Variable Groups** → attach `squawkbox-config`.
+4. In each service's own variables, also add the Redis reference:
+   - **Name:** `REDIS_URL`
+   - **Value:** `${{Redis.REDIS_URL}}`
+
+### Variable reference
+
+| Variable | Required | Where to get it |
+|---|---|---|
+| `SUPABASE_URL` | Yes | Supabase → Project Settings → API → Project URL |
+| `SUPABASE_KEY` | Yes | Supabase → Project Settings → API → `service_role` secret (not `anon` — service role bypasses RLS) |
+| `DATABASE_URL` | Yes | Supabase → Project Settings → Database → Connection string → URI. Used by Alembic migrations only. |
+| `NEWSDATA_API_KEY` | Yes | https://newsdata.io/dashboard → API key |
+| `TAVILY_API_KEY` | Yes | https://app.tavily.com/home → API key |
+| `TOGETHER_API_KEY` | Yes | https://api.together.ai → Settings → API Keys → create one |
+| `CARTESIA_API_KEY` | Yes | https://play.cartesia.ai → API Keys in sidebar |
+| `CARTESIA_VOICE_ID` | Yes | https://play.cartesia.ai → Voices → pick a voice → copy its ID |
+| `TWILIO_ACCOUNT_SID` | Yes | Twilio Console home → Account SID |
+| `TWILIO_AUTH_TOKEN` | Yes | Twilio Console home → click Show next to Auth Token |
+| `TWILIO_WHATSAPP_FROM` | Yes | Twilio sandbox phone number, e.g. `+14155238886` (include the `+`) |
+| `PUBLIC_BASE_URL` | Yes | Your Railway app domain from step 5a, e.g. `https://app-production-abc123.up.railway.app` — no trailing slash |
+| `STRIPE_SECRET_KEY` | Yes | `sk_test_dummy` for now, or a real key from https://dashboard.stripe.com/test/apikeys |
+| `STRIPE_WEBHOOK_SECRET` | Yes | `whsec_dummy` for now |
+| `STRIPE_PAYMENT_LINK` | Yes | `https://buy.stripe.com/test_dummy` for now |
+| `ADMIN_SECRET` | Yes | Any long random string — protects `/admin/*` endpoints via `X-Admin-Secret` header |
+| `SENTRY_DSN` | No | Leave blank to disable Sentry. Get from https://sentry.io if you want error tracking. |
+| `YOUR_WHATSAPP_NUMBER` | No | Twilio sandbox number without the `+`, e.g. `14155238886`. Used for wa.me referral deep links. |
+| `TERMS_URL` | Yes | Any URL, e.g. `https://example.com/terms` |
+
+**Note:** `REDIS_URL` is set per-service as a reference variable
+(`${{Redis.REDIS_URL}}`), not in the shared group.
+
+---
+
+## 7. Set up Twilio WhatsApp sandbox
+
+1. In the Twilio Console, go to **Messaging → Try it out → Send a
+   WhatsApp message**.
+2. Note the **sandbox phone number** (e.g. `+1 415 523 8886`) and the
+   **join word** (e.g. `join violet-purple`).
+3. Tap **Sandbox settings**.
+4. In **"When a message comes in"**, paste your Railway app URL with
+   `/webhook`:
    ```
-2. Restart the app container so it picks up the new value:
-   ```bash
-   docker compose restart app worker beat
+   https://app-production-abc123.up.railway.app/webhook
    ```
+   Method: **HTTP POST**.
+5. Tap **Save**.
 
-### 4b. Paste the webhook URL into Twilio
-
-1. Back in the Twilio Console, go to **Messaging → Try it out → Send a
-   WhatsApp message → Sandbox settings**.
-2. In **"When a message comes in"**, paste:
-   ```
-   https://abc123.ngrok-free.app/webhook
-   ```
-   and make sure the method is `HTTP POST`.
-3. Click **Save**.
-
-### 4c. Join the sandbox from your phone
+### Join the sandbox from your phone
 
 1. Open WhatsApp on your phone.
-2. Start a new chat with the Twilio sandbox number
-   (`+1 415 523 8886` or whatever step 2.5 gave you).
-3. Send the join word from step 2.7, e.g.:
-   ```
-   join violet-purple
-   ```
-4. Twilio replies confirming you've joined. Your phone number is now
-   authorised to exchange messages with the sandbox for the next 72 hours.
+2. Start a new chat with the sandbox number.
+3. Send the join word (e.g. `join violet-purple`).
+4. Twilio confirms you've joined. You're authorized for 72 hours.
 
 ---
 
-## 5. Run database migrations
+## 8. Database migrations
 
-The Supabase project is empty — run Alembic once to create the schema:
+Migrations run automatically on every deploy — the app service's start
+command begins with `alembic upgrade head`.
 
-```bash
-docker compose run --rm app alembic upgrade head
-```
+After the first successful deploy, verify in **Supabase Studio → Table
+Editor** that these tables exist: `users`, `ticker_subscriptions`,
+`subscriptions`, `referrals`, `squawk_logs`, `squawk_deliveries`.
 
-You should see `Running upgrade  -> 001_initial_schema`. Check in
-Supabase Studio (**Table Editor**) that the `users`,
-`ticker_subscriptions`, `subscriptions`, `referrals`, `squawk_logs`, and
-`squawk_deliveries` tables now exist.
+If tables are missing, check the app service's deploy logs in Railway.
 
 ---
 
-## 6. Create a starter user
+## 9. Create a starter user
 
-The normal signup flow is `START_<referral_code>`, which requires an
-existing user to refer you — a chicken-and-egg problem on first run. The
-quickest way to bootstrap yourself is to insert a row directly in
-Supabase.
+The signup flow requires a referral code from an existing user. Bootstrap
+yourself directly in Supabase:
 
 1. Open **Supabase Studio → SQL Editor → New query**.
 2. Run:
    ```sql
-   insert into users (phone_number, subscription_status, trial_expiry, referral_code, terms_accepted_at)
-   values (
-     '+15551234567',                          -- your WhatsApp number (E.164, incl +)
+   INSERT INTO users (phone_number, subscription_status, trial_expiry,
+                      referral_code, terms_accepted_at)
+   VALUES (
+     '+15551234567',
      'trial',
      now() + interval '7 days',
      'BOOTSTRAP',
      now()
    );
    ```
-   Replace `+15551234567` with the same number you joined the sandbox
-   from.
-
-Now the app will recognise you as a trial user and accept commands like
-`ADD AAPL`, `LIST`, `HELP`, `STOP`.
+   Replace `+15551234567` with the phone number you joined the sandbox
+   from (E.164 format, include the `+`).
 
 ---
 
-## 7. Verify it's working
+## 10. Verify it's working
 
-Go through this checklist top-to-bottom. Each step should pass before
-moving on.
-
-- [ ] **App healthy:** `curl http://localhost:8000/health` → `{"status":"ok"}`
-- [ ] **Redis connected:** `docker compose exec redis redis-cli ping` → `PONG`
-- [ ] **Worker running:** `docker compose logs worker | grep "ready"` shows
-      `celery@... ready.`
-- [ ] **Beat running:** `docker compose logs beat | grep "Scheduler"` shows
-      `Scheduler: Sending due task poll-news-every-15-minutes`
-- [ ] **ngrok reachable:** open the `PUBLIC_BASE_URL` in a browser — you
-      should see ngrok's warning page, click through, then you'll hit the
-      app's root and see `{"detail":"Not Found"}` (that's fine — it means
-      the tunnel and FastAPI are both up).
-- [ ] **Twilio webhook configured:** Twilio sandbox page shows the
-      `https://.../webhook` URL in the "When a message comes in" field.
-- [ ] **Joined the sandbox:** you got a confirmation WhatsApp from Twilio
-      after sending `join <word>-<word>`.
-- [ ] **User exists:** `select * from users where phone_number = '+...';`
-      in Supabase SQL Editor returns a row with `subscription_status='trial'`.
-- [ ] **Text round-trip:** send `HELP` to the sandbox number — you should
-      get back the command list within a few seconds. Check
-      `docker compose logs app` for the webhook request.
-- [ ] **ADD and LIST:** send `ADD AAPL`, then `LIST`. You should see
-      `Added *AAPL* to your watchlist.` then `Your tickers: AAPL`.
-- [ ] **First voice note:** voice notes arrive when the news poller finds
-      an unseen article for one of your tracked tickers. The poll runs
-      every 15 minutes via Celery beat. To trigger it immediately, run:
-      ```bash
-      docker compose exec worker python -c "from celery_worker import poll_news; poll_news()"
-      ```
-      Watch the worker logs — you should see
-      `Processing article: ...` → `Pipeline complete for AAPL: ... delivered to 1 users`
-      and receive a voice note in WhatsApp.
-
-If any step fails, check `docker compose logs <service>` for the error.
-Twilio signature failures usually mean `PUBLIC_BASE_URL` doesn't exactly
-match the ngrok URL Twilio is calling — including scheme, host, and
-*no* trailing slash.
+- [ ] **Railway services green:** All three services show Active in the
+      Railway dashboard.
+- [ ] **App healthy:** Open `https://<your-railway-url>/health` in Safari
+      → `{"status":"ok"}`
+- [ ] **Worker running:** Railway → worker → Logs → `celery@... ready.`
+- [ ] **Beat running:** Railway → beat → Logs → `beat: Starting...`
+- [ ] **Twilio webhook set:** Sandbox settings shows your Railway URL
+      with `/webhook`.
+- [ ] **Sandbox joined:** You got a confirmation WhatsApp from Twilio.
+- [ ] **User exists:** Supabase SQL Editor →
+      `SELECT * FROM users WHERE phone_number = '+...';` returns a row.
+- [ ] **Text round-trip:** Send `HELP` via WhatsApp → get the command
+      list back. Check app logs in Railway.
+- [ ] **ADD and LIST:** Send `ADD AAPL`, then `LIST`.
+- [ ] **Voice note:** Beat polls news every 15 minutes. Watch worker logs
+      for `Processing article: ...` → `Pipeline complete`. You'll receive
+      a voice note in WhatsApp when a relevant article is found.
 
 ---
 
-## 8. Known unknowns
+## 11. Viewing logs
 
-Things that are intentionally left unexplained or that you may hit and
-need to figure out yourself:
-
-- **Sandbox expiry.** The Twilio WhatsApp sandbox only talks to numbers
-  that sent `join <word>-<word>` within the last 72 hours. If messages
-  stop being delivered, re-send the join command.
-- **ngrok URL rotation.** Free-tier ngrok gives you a new URL each
-  time you restart it. Every new URL means updating both
-  `PUBLIC_BASE_URL` in `.env` *and* the webhook URL in the Twilio
-  sandbox settings, *and* restarting the app. Consider a paid ngrok
-  reserved subdomain if you're iterating a lot.
-- **Supabase Row Level Security.** The code uses the `service_role` key
-  to bypass RLS. If you swap to the `anon` key, reads and writes will
-  silently return empty — that's an RLS misconfiguration, not a bug.
-- **Cartesia audio format.** `send_voice_note()` assumes Cartesia returns
-  WAV bytes (from `services/analyst.py:248-288`) and asks FFmpeg to
-  transcode to OGG/Opus. If Cartesia's default output changes, update
-  the `input_format` argument.
-- **YOUR_WHATSAPP_NUMBER vs TWILIO_WHATSAPP_FROM.** These look redundant
-  and in the sandbox they are — both point at the sandbox number.
-  `TWILIO_WHATSAPP_FROM` is used to actually send outbound messages;
-  `YOUR_WHATSAPP_NUMBER` is baked into referral deep links
-  (`services/referrals.py:130-137`).
-- **Stripe with dummy keys.** Checkout and webhook flows won't work with
-  dummy `sk_test_dummy`/`whsec_dummy` values. The app will still start
-  — you just can't exercise billing end-to-end until you plug in real
-  Stripe test-mode keys.
-- **Voice-note media endpoint exposure.** The `/media/{token}` route is
-  unauthenticated so that Twilio can fetch audio without credentials.
-  Tokens are 256-bit URL-safe and expire after 10 minutes, but in a
-  public deployment you may want to additionally allow-list Twilio's
-  egress IPs at the reverse-proxy layer.
+1. Open your project in the Railway dashboard.
+2. Click any service (app, worker, beat).
+3. Tap **Logs** for real-time output.
 
 ---
 
-## 9. Daily dev loop
+## 12. Redeploying
 
-- `docker compose up` — start everything (omit `--build` after the first run)
-- `docker compose logs -f app worker beat` — tail the app logs
-- `docker compose run --rm app pytest tests/ -v` — run tests in the image
-- `docker compose down` — stop everything
+Railway auto-deploys all three services when you push to the connected
+branch on GitHub. Manual redeploy: click a service → **Deployments** →
+**Redeploy**.
+
+---
+
+## 13. Known unknowns
+
+- **Sandbox expiry.** The Twilio sandbox only talks to numbers that sent
+  the join word within the last 72 hours. Re-send it if messages stop.
+- **Supabase RLS.** The code uses the `service_role` key to bypass RLS.
+  Swapping to the `anon` key will silently return empty results.
+- **Cartesia audio format.** `send_voice_note()` assumes WAV from Cartesia
+  and transcodes to OGG/Opus via FFmpeg. If Cartesia changes defaults,
+  update `input_format` in `services/analyst.py`.
+- **YOUR_WHATSAPP_NUMBER vs TWILIO_WHATSAPP_FROM.** Both point at the
+  sandbox number. `TWILIO_WHATSAPP_FROM` sends messages;
+  `YOUR_WHATSAPP_NUMBER` builds wa.me referral links.
+- **Stripe dummy keys.** Billing flows won't work until you plug in real
+  Stripe test-mode keys. The app still starts fine.
+- **Voice-note media endpoint.** `/media/{token}` is unauthenticated so
+  Twilio can fetch audio. Tokens are 256-bit URL-safe, expire in 10 min.
+- **Railway sleep.** On hobby tier, services may sleep after inactivity.
+  First request after idle may time out — retry after a minute.
+
+---
+
+## 14. Limitations
+
+These steps genuinely cannot be done from an iPad:
+
+- **Running tests locally.** `pytest` requires a Python environment and
+  terminal. Tests run automatically via GitHub Actions CI on every push
+  to `main` or on pull requests — check the **Actions** tab on GitHub.
+- **Local Docker development.** `docker-compose.yml` in the repo is for
+  local laptop development only. Railway does not use it.
+- **Writing new Alembic migrations.** `alembic revision` requires a local
+  Python + Alembic setup. Running existing migrations works automatically
+  on Railway via the app start command.
+- **FFmpeg debugging.** If audio conversion fails, diagnosing FFmpeg
+  requires a terminal. Check worker logs in Railway for error output.
+
+For everything else — deploying, configuring, monitoring, viewing logs,
+managing the database via Supabase Studio, configuring Twilio — Safari
+on an iPad is all you need.
+
+---
+
+## Local development (optional, requires a laptop)
+
+The repo includes `docker-compose.yml` for running the full stack locally
+with Docker Desktop. You'll also need ngrok to expose port 8000 to Twilio.
+See the comments at the top of that file for usage.
