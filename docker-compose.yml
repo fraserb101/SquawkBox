@@ -1,0 +1,54 @@
+# Local development stack for SquawkBox.
+#
+# Spins up the FastAPI app (uvicorn), a Celery worker, a Celery beat
+# scheduler, and a Redis instance. Supabase is hosted, so there's no
+# Postgres container — the DB connection is just an env var pointing at
+# your Supabase project.
+#
+# Usage:
+#   cp .env.example .env && fill in values
+#   docker compose up --build
+#
+# Then expose port 8000 with ngrok and paste the public URL into the
+# Twilio WhatsApp sandbox "When a message comes in" field. See SETUP.md
+# for the full walkthrough.
+
+services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  app:
+    build: .
+    command: uvicorn main:app --host 0.0.0.0 --port 8000 --workers 1
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  worker:
+    build: .
+    command: celery -A celery_worker worker --loglevel=info
+    env_file:
+      - .env
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  beat:
+    build: .
+    command: celery -A celery_worker beat --loglevel=info
+    env_file:
+      - .env
+    depends_on:
+      redis:
+        condition: service_healthy

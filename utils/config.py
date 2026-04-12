@@ -38,11 +38,15 @@ TOGETHER_API_KEY = _require("TOGETHER_API_KEY")
 CARTESIA_API_KEY = _require("CARTESIA_API_KEY")
 CARTESIA_VOICE_ID = _require("CARTESIA_VOICE_ID")
 
-# WhatsApp
-WHATSAPP_PHONE_NUMBER_ID = _require("WHATSAPP_PHONE_NUMBER_ID")
-WHATSAPP_ACCESS_TOKEN = _require("WHATSAPP_ACCESS_TOKEN")
-WHATSAPP_VERIFY_TOKEN = _require("WHATSAPP_VERIFY_TOKEN")
-WHATSAPP_APP_SECRET = _require("WHATSAPP_APP_SECRET")
+# WhatsApp via Twilio
+TWILIO_ACCOUNT_SID = _require("TWILIO_ACCOUNT_SID")
+TWILIO_AUTH_TOKEN = _require("TWILIO_AUTH_TOKEN")
+TWILIO_WHATSAPP_FROM = _require("TWILIO_WHATSAPP_FROM")
+
+# Public base URL (e.g. ngrok tunnel) where Twilio POSTs the webhook and
+# fetches cached voice notes from. Used both for signature verification
+# and to construct MediaUrl values.
+PUBLIC_BASE_URL = _require("PUBLIC_BASE_URL")
 
 # Stripe
 STRIPE_SECRET_KEY = _require("STRIPE_SECRET_KEY")
