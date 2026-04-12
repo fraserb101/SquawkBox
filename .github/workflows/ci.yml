@@ -20,10 +20,10 @@ jobs:
       TOGETHER_API_KEY: test
       CARTESIA_API_KEY: test
       CARTESIA_VOICE_ID: test
-      WHATSAPP_PHONE_NUMBER_ID: "123"
-      WHATSAPP_ACCESS_TOKEN: test-token
-      WHATSAPP_VERIFY_TOKEN: test-verify
-      WHATSAPP_APP_SECRET: test-secret
+      TWILIO_ACCOUNT_SID: ACtest
+      TWILIO_AUTH_TOKEN: test-token
+      TWILIO_WHATSAPP_FROM: "+14155238886"
+      PUBLIC_BASE_URL: https://test.ngrok-free.app
       STRIPE_SECRET_KEY: sk_test_xxx
       STRIPE_WEBHOOK_SECRET: whsec_test
       STRIPE_PAYMENT_LINK: https://pay.stripe.com/test
